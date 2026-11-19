@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+*.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# ChromaDB
+chroma_store/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# ARIA backups
+backups/
+**/backups/
+
+# Additional environment files
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Local inspection scripts
+backend/inspect_chroma_db.py
+
+# Local secrets
+*.pem
+*.key

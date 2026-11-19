@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="112 56 370 103" width="370" height="103">
+  <defs>
+    <!-- Luxury Champagne to Electric Cyan Gradient -->
+    <linearGradient id="aria-main-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F7E7CE" />
+      <stop offset="45%" stop-color="#D4AF37" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+
+    <!-- Subtle Metallic Sheen for Secondary Strokes -->
+    <linearGradient id="aria-silver-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8A99AD" />
+      <stop offset="50%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+  </defs>
+
+  <!-- LOGO TYPOGRAPHY GROUP (Centered) -->
+  <g transform="translate(115, 55)" >
+    
+    <!-- LETTER 1: 'A' (Architectural Apex + AI Spark Crossbar) -->
+    <g id="letter-A1">
+      <!-- Left & Right Blades -->
+      <path d="M 42 5 L 8 95" stroke="url(#aria-silver-grad)" stroke-width="7" stroke-linecap="round" />
+      <path d="M 42 5 L 76 95" stroke="url(#aria-main-grad)" stroke-width="7" stroke-linecap="round" />
+      <!-- AI 4-Point Spark replacing the crossbar -->
+      <path d="M 42 54 Q 42 64 56 64 Q 42 64 42 74 Q 42 64 28 64 Q 42 64 42 54 Z" fill="#00F0FF" />
+    </g>
+
+    <!-- LETTER 2: 'R' (Segmented Futurism with Floating Stem) -->
+    <g id="letter-R" transform="translate(105, 0)">
+      <!-- Vertical Stem with Tech Gap -->
+      <path d="M 10 5 L 10 42" stroke="url(#aria-silver-grad)" stroke-width="7" stroke-linecap="round" />
+      <path d="M 10 56 L 10 95" stroke="url(#aria-silver-grad)" stroke-width="7" stroke-linecap="round" />
+      <!-- Bowl & Dynamic Kickstand Leg -->
+      <path d="M 10 5 L 44 5 C 66 5 66 48 44 48 L 22 48 L 64 95" fill="none" stroke="url(#aria-main-grad)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+    </g>
+
+    <!-- LETTER 3: 'I' (Neural Pillar with Floating Core Node) -->
+    <g id="letter-I" transform="translate(198, 0)">
+      <!-- Floating AI Core Node -->
+      <circle cx="15" cy="10" r="4.5" fill="#00F0FF" />
+      <circle cx="15" cy="10" r="9" fill="none" stroke="#00F0FF" stroke-width="1" stroke-opacity="0.6" />
+      <!-- Main Pillar -->
+      <path d="M 15 28 L 15 95" stroke="url(#aria-main-grad)" stroke-width="7" stroke-linecap="round" />
+    </g>
+
+    <!-- LETTER 4: 'A' (Mirrored Architectural Apex + AI Spark Crossbar) -->
+    <g id="letter-A2" transform="translate(245, 0)">
+      <!-- Left & Right Blades -->
+      <path d="M 42 5 L 8 95" stroke="url(#aria-main-grad)" stroke-width="7" stroke-linecap="round" />
+      <path d="M 42 5 L 76 95" stroke="url(#aria-silver-grad)" stroke-width="7" stroke-linecap="round" />
+      <!-- AI 4-Point Spark replacing the crossbar -->
+      <path d="M 42 54 Q 42 64 56 64 Q 42 64 42 74 Q 42 64 28 64 Q 42 64 42 54 Z" fill="#F7E7CE" />
+    </g>
+
+  </g>
+</svg>

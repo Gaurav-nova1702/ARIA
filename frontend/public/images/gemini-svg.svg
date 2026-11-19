@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="24 24 192 192" width="240" height="240">
+  <defs>
+    <!-- Champagne Gold to Cyan Gradient -->
+    <linearGradient id="emblem-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F7E7CE" />
+      <stop offset="50%" stop-color="#D4AF37" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+
+    <!-- Electric Cyan Accent -->
+    <linearGradient id="emblem-cyan" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0077FF" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+  </defs>
+
+  <!-- Subtle Hexagonal AI Containment Ring -->
+  <polygon points="120,22 205,71 205,169 120,218 35,169 35,71" fill="none" stroke="#D4AF37" stroke-opacity="0.24" stroke-width="1.5" />
+
+  <!-- FUSED A-R-I-A MONOGRAM -->
+  <g>
+    
+    <!-- 1. 'I' - Central Neural Pillar & Top AI Core -->
+    <circle cx="120" cy="48" r="6" fill="#00F0FF" />
+    <circle cx="120" cy="48" r="12" fill="none" stroke="#00F0FF" stroke-width="1.2" stroke-opacity="0.5" />
+    <path d="M 120 72 L 120 185" stroke="url(#emblem-cyan)" stroke-width="8" stroke-linecap="round" />
+
+    <!-- 2. 'A' (Primary) - Outer Architectural Triangle -->
+    <path d="M 120 68 L 56 185" stroke="url(#emblem-gold)" stroke-width="9" stroke-linecap="round" />
+    <path d="M 120 68 L 184 185" stroke="url(#emblem-gold)" stroke-width="9" stroke-linecap="round" />
+
+    <!-- 3. 'R' - Upper Bowl & Diagonal Leg emerging from the Axis -->
+    <path d="M 120 68 L 154 68 C 182 68 182 118 154 118 L 124 118 L 178 185" fill="none" stroke="url(#emblem-cyan)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- 4. 'A' (Secondary) - Inner Crossbar & AI Spark Nexus -->
+    <path d="M 78 148 L 162 148" stroke="url(#emblem-gold)" stroke-width="7" stroke-linecap="round" stroke-opacity="0.85" />
+    <!-- 4-Point AI Star at the center intersection -->
+    <path d="M 120 134 Q 120 148 136 148 Q 120 148 120 162 Q 120 148 104 148 Q 120 148 120 134 Z" fill="#F7E7CE" />
+
+  </g>
+</svg>
