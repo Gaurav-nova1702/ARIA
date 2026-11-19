@@ -13,7 +13,8 @@ from chromadb.config import Settings
 from dotenv import load_dotenv
 from sqlalchemy import select, delete, func, update
 
-from models.database import AsyncSessionLocal, Knowledge
+from models.database import AsyncSessionLocal, Knowledge, engine
+from agent.pgvector_store import PgVectorStore
 from utils.embeddings import get_embedding
 
 load_dotenv()
@@ -33,21 +34,44 @@ class KnowledgeManager:
     - Deduplication to prevent near-duplicate entries.
     """
 
+
     def __init__(self):
-        self._chroma_client = chromadb.PersistentClient(
-            path=_CHROMA_PATH,
-            settings=Settings(anonymized_telemetry=False),
-        )
-        self._collection = self._chroma_client.get_or_create_collection(
-            name="knowledge",
-            metadata={"hnsw:space": "cosine"},
-        )
+        self._use_pgvector = engine.dialect.name == "postgresql"
+
+        self._pgvector = None
+        self._chroma_client = None
+        self._collection = None
+
+        if self._use_pgvector:
+            # Cloud mode: Supabase PostgreSQL + pgvector.
+            self._pgvector = PgVectorStore(engine)
+
+            logger.info(
+                "ARIA KnowledgeManager initialized with PostgreSQL pgvector"
+            )
+
+        else:
+            # Local mode: preserve the existing ChromaDB.
+            self._chroma_client = chromadb.PersistentClient(
+                path=_CHROMA_PATH,
+                settings=Settings(anonymized_telemetry=False),
+            )
+
+            self._collection = self._chroma_client.get_or_create_collection(
+                name="knowledge",
+                metadata={"hnsw:space": "cosine"},
+            )
+
+            logger.info(
+                "ARIA KnowledgeManager initialized with local ChromaDB"
+            )
+
 
     # ------------------------------------------------------------------
     # Add
     # ------------------------------------------------------------------
 
-    
+
     async def add_knowledge(
         self,
         topic: str,
@@ -72,29 +96,49 @@ class KnowledgeManager:
         embedding = get_embedding(content)
 
         # Check duplicates belonging only to this user
+
+        # Check duplicates belonging only to this user.
         try:
-            results = self._collection.query(
-                query_embeddings=[embedding],
-                n_results=1,
-                where={"user_id": user_id},
-                include=["distances"],
-            )
+            if self._use_pgvector:
+                # Cloud: find the most similar owned knowledge vector.
+                matches = await self._pgvector.search(
+                    kind="knowledge",
+                    user_id=user_id,
+                    embedding=embedding,
+                    limit=1,
+                )
 
-            if results["distances"] and results["distances"][0]:
-                similarity = 1.0 - results["distances"][0][0]
+                similarity = (
+                    matches[0]["similarity"] if matches else None
+                )
 
-                if similarity >= _DEDUP_THRESHOLD:
-                    logger.info(
-                        "Skipping duplicate knowledge entry "
-                        "for user %s (similarity=%.3f)",
-                        user_id,
-                        similarity,
-                    )
-                    return None
+            else:
+                # Local: preserve existing ChromaDB deduplication.
+                results = self._collection.query(
+                    query_embeddings=[embedding],
+                    n_results=1,
+                    where={"user_id": user_id},
+                    include=["distances"],
+                )
+
+                similarity = None
+
+                if results["distances"] and results["distances"][0]:
+                    similarity = 1.0 - results["distances"][0][0]
+
+            if similarity is not None and similarity >= _DEDUP_THRESHOLD:
+                logger.info(
+                    "Skipping duplicate knowledge entry "
+                    "for user %s (similarity=%.3f)",
+                    user_id,
+                    similarity,
+                )
+                return None
 
         except Exception:
             logger.exception("Knowledge deduplication check failed")
             raise
+
 
         knowledge_id = str(uuid.uuid4())
         chroma_id = f"k_{knowledge_id}"
@@ -115,29 +159,44 @@ class KnowledgeManager:
             await db.commit()
 
         # Save to ChromaDB with ownership
+
+        # Save vector with authenticated ownership.
         try:
-            self._collection.add(
-                ids=[chroma_id],
-                embeddings=[embedding],
-                documents=[content],
-                metadatas=[
-                    {
-                        "user_id": user_id,
-                        "topic": topic,
-                        "knowledge_id": knowledge_id,
-                        "source_url": source_url or "",
-                    }
-                ],
-            )
+            metadata = {
+                "user_id": user_id,
+                "topic": topic,
+                "knowledge_id": knowledge_id,
+                "source_url": source_url or "",
+            }
+
+            if self._use_pgvector:
+                # Cloud: Supabase PostgreSQL.
+                await self._pgvector.add_vector(
+                    kind="knowledge",
+                    vector_id=chroma_id,
+                    user_id=user_id,
+                    document=content,
+                    embedding=embedding,
+                    metadata=metadata,
+                )
+
+            else:
+                # Local: preserve existing ChromaDB storage.
+                self._collection.add(
+                    ids=[chroma_id],
+                    embeddings=[embedding],
+                    documents=[content],
+                    metadatas=[metadata],
+                )
 
         except Exception as exc:
             logger.error(
-                "ChromaDB add failed for knowledge %s: %s",
+                "Vector storage failed for knowledge %s: %s",
                 knowledge_id,
                 exc,
             )
 
-            # Roll back the new SQLite entry only
+            # Roll back only this newly created knowledge entry.
             async with AsyncSessionLocal() as db:
                 await db.execute(
                     delete(Knowledge).where(
@@ -149,6 +208,7 @@ class KnowledgeManager:
 
             return None
 
+
         return knowledge_id
 
 
@@ -156,7 +216,7 @@ class KnowledgeManager:
     # Search
     # ------------------------------------------------------------------
 
-    
+
     async def search_knowledge(
         self,
         query: str,
@@ -172,34 +232,67 @@ class KnowledgeManager:
         if not query.strip() or n_results < 1:
             return []
 
+
         try:
-            count = self._collection.count()
+            if self._use_pgvector:
+                # Cloud: retrieve only this user's knowledge.
+                embedding = get_embedding(query)
 
-            if count == 0:
-                return []
+                matches = await self._pgvector.search(
+                    kind="knowledge",
+                    user_id=user_id,
+                    embedding=embedding,
+                    limit=n_results,
+                )
 
-            embedding = get_embedding(query)
+                documents = [
+                    item["document"] for item in matches
+                ]
+                metadatas = [
+                    item["metadata"] or {} for item in matches
+                ]
+                similarities = [
+                    item["similarity"] for item in matches
+                ]
 
-            results = self._collection.query(
-                query_embeddings=[embedding],
-                n_results=min(n_results, count),
-                where={"user_id": user_id},
-                include=["documents", "metadatas", "distances"],
-            )
+            else:
+                # Local: preserve existing ChromaDB search.
+                count = self._collection.count()
+
+                if count == 0:
+                    return []
+
+                embedding = get_embedding(query)
+
+                results = self._collection.query(
+                    query_embeddings=[embedding],
+                    n_results=min(n_results, count),
+                    where={"user_id": user_id},
+                    include=["documents", "metadatas", "distances"],
+                )
+
+                documents = results["documents"][0]
+                metadatas = results["metadatas"][0]
+                similarities = [
+                    1.0 - dist
+                    for dist in results["distances"][0]
+                ]
 
         except Exception as exc:
             logger.error("Knowledge search failed: %s", exc)
             return []
 
+
         output = []
         knowledge_ids = []
 
-        for doc, meta, dist in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
+        for doc, meta, score in zip(
+            documents,
+            metadatas,
+            similarities,
         ):
-            similarity = round(1.0 - dist, 4)
+            similarity = round(score, 4)
+
 
             if similarity < _SIMILARITY_THRESHOLD:
                 continue
@@ -250,7 +343,7 @@ class KnowledgeManager:
     # List
     # ------------------------------------------------------------------
 
-    
+
     async def get_all_knowledge(
         self,
         limit: int = 50,
@@ -292,7 +385,7 @@ class KnowledgeManager:
     # Delete
     # ------------------------------------------------------------------
 
-    
+
     async def delete_knowledge(
         self,
         knowledge_id: str,
@@ -321,12 +414,23 @@ class KnowledgeManager:
             await db.delete(entry)
             await db.commit()
 
+
         if chroma_id:
             try:
-                self._collection.delete(ids=[chroma_id])
+                if self._use_pgvector:
+                    # Cloud: delete only the authenticated user's vector.
+                    await self._pgvector.delete_vector(
+                        kind="knowledge",
+                        vector_id=chroma_id,
+                        user_id=user_id,
+                    )
+                else:
+                    # Local: preserve ChromaDB deletion.
+                    self._collection.delete(ids=[chroma_id])
+
             except Exception as exc:
                 logger.warning(
-                    "ChromaDB delete failed for %s: %s",
+                    "Knowledge vector deletion failed for %s: %s",
                     chroma_id,
                     exc,
                 )
@@ -334,11 +438,12 @@ class KnowledgeManager:
         return True
 
 
+
     # ------------------------------------------------------------------
     # Metrics
     # ------------------------------------------------------------------
 
-    
+
     async def get_metrics(self, *, user_id: str) -> dict:
         """Return Knowledge Base statistics for one user."""
 

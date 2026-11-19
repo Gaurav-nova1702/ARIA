@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 
-from models.database import init_db, AsyncSessionLocal, Conversation, Knowledge, Feedback
+from models.database import init_db, AsyncSessionLocal, Conversation, Knowledge, Feedback, engine
 from utils.auth import get_current_user_id
 
 load_dotenv()
@@ -35,26 +35,46 @@ _CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_store")
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
-    logger.info("Starting Self-Learning AI Agent backend v%s", _VERSION)
+    logger.info("Starting ARIA backend v%s", _VERSION)
 
-    # Initialize the SQLite database (create tables if needed)
+    # Initialize the selected SQL database.
     await init_db()
-    logger.info("Database initialized.")
-
-    # Initialize ChromaDB (creates the store directory if needed)
-    chroma_client = chromadb.PersistentClient(
-        path=_CHROMA_PATH,
-        settings=Settings(anonymized_telemetry=False),
+    logger.info(
+        "ARIA database initialized: %s",
+        engine.dialect.name,
     )
-    app.state.chroma_client = chroma_client
-    logger.info("ChromaDB initialized at %s", _CHROMA_PATH)
 
-    yield  # Application is running
+    if engine.dialect.name == "postgresql":
+        # Cloud mode: semantic memory is handled by pgvector.
+        # Do not create a local ChromaDB directory.
+        app.state.chroma_client = None
 
-    logger.info("Shutting down Self-Learning AI Agent backend.")
+        logger.info(
+            "ARIA cloud mode enabled: PostgreSQL + pgvector"
+        )
+
+    else:
+        # Local mode: preserve existing ChromaDB behavior.
+        chroma_client = chromadb.PersistentClient(
+            path=_CHROMA_PATH,
+            settings=Settings(anonymized_telemetry=False),
+        )
+
+        app.state.chroma_client = chroma_client
+
+        logger.info(
+            "ARIA local ChromaDB initialized at %s",
+            _CHROMA_PATH,
+        )
+
+    yield
+
+    logger.info("Shutting down ARIA backend.")
+
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +97,28 @@ app = FastAPI(
 # CORS (allow all origins for development)
 # ---------------------------------------------------------------------------
 
+
+# Allowed frontend origins.
+# Example:
+# CORS_ORIGINS=http://localhost:5173,https://your-aria-app.vercel.app
+
+CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
 
 # ---------------------------------------------------------------------------
 # Routers
@@ -193,13 +228,20 @@ async def not_found_handler(request: Request, exc):
     )
 
 
+
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc):
-    logger.error("Internal server error on %s: %s", request.url.path, exc)
+    logger.error(
+        "Internal server error on %s: %s",
+        request.url.path,
+        exc,
+    )
+
     return JSONResponse(
         status_code=500,
-        content={"error": "Internal Server Error", "detail": str(exc)},
+        content={"error": "Internal Server Error"},
     )
+
 
 
 # ---------------------------------------------------------------------------

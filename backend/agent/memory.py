@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 from sqlalchemy import select, delete, func
 from google import genai
 
-from models.database import AsyncSessionLocal, Conversation
+from models.database import AsyncSessionLocal, Conversation, engine
+from agent.pgvector_store import PgVectorStore
 from utils.embeddings import get_embedding
 
 load_dotenv()
@@ -39,22 +40,44 @@ class MemoryManager:
     2. Semantic / episodic memory — stored in ChromaDB.
     """
 
-    def __init__(self):
-        self._chroma_client = chromadb.PersistentClient(
-            path=_CHROMA_PATH,
-            settings=Settings(anonymized_telemetry=False),
-        )
 
-        self._collection = self._chroma_client.get_or_create_collection(
-            name="conversations_gemini_embedding_001",
-            metadata={"hnsw:space": "cosine"},
-        )
+    def __init__(self):
+        self._use_pgvector = engine.dialect.name == "postgresql"
+
+        self._pgvector = None
+        self._chroma_client = None
+        self._collection = None
+
+        if self._use_pgvector:
+            # Cloud mode: Supabase PostgreSQL + pgvector.
+            self._pgvector = PgVectorStore(engine)
+
+            logger.info(
+                "ARIA MemoryManager initialized with PostgreSQL pgvector"
+            )
+
+        else:
+            # Local mode: preserve existing ChromaDB behavior.
+            self._chroma_client = chromadb.PersistentClient(
+                path=_CHROMA_PATH,
+                settings=Settings(anonymized_telemetry=False),
+            )
+
+            self._collection = self._chroma_client.get_or_create_collection(
+                name="conversations_gemini_embedding_001",
+                metadata={"hnsw:space": "cosine"},
+            )
+
+            logger.info(
+                "ARIA MemoryManager initialized with local ChromaDB"
+            )
+
 
     # --------------------------------------------------------------
     # Session history (SQLite)
     # --------------------------------------------------------------
 
-   
+
     async def get_session_history(
         self,
         session_id: str,
@@ -93,7 +116,7 @@ class MemoryManager:
         ]
 
 
-    
+
     async def store_conversation(
         self,
         session_id: str,
@@ -126,61 +149,117 @@ class MemoryManager:
             await db.commit()
 
         # Index in ChromaDB (best-effort).
+
+        # Index conversation in the selected vector database.
+        # The structured conversation has already been saved.
         try:
             combined = f"User: {user_msg}\nAssistant: {ai_response}"
             embedding = get_embedding(combined)
 
-            self._collection.add(
-                ids=[conv_id],
-                embeddings=[embedding],
-                documents=[combined],
-                metadatas=[
-                    {
-                        "user_id": user_id,
-                        "session_id": session_id,
-                        "conv_id": conv_id,
-                    }
-                ],
-            )
+            metadata = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "conv_id": conv_id,
+            }
+
+            if self._use_pgvector:
+                # Cloud: save to Supabase PostgreSQL.
+                await self._pgvector.add_vector(
+                    kind="conversation",
+                    vector_id=conv_id,
+                    user_id=user_id,
+                    document=combined,
+                    embedding=embedding,
+                    metadata=metadata,
+                )
+
+                logger.info(
+                    "Conversation %s indexed in pgvector",
+                    conv_id,
+                )
+
+            else:
+                # Local: preserve existing ChromaDB behavior.
+                self._collection.add(
+                    ids=[conv_id],
+                    embeddings=[embedding],
+                    documents=[combined],
+                    metadatas=[metadata],
+                )
+
         except Exception as exc:
             logger.warning(
-                "ChromaDB index failed for conversation %s: %s",
+                "Vector indexing failed for conversation %s: %s",
                 conv_id,
                 exc,
             )
 
+
         return conv_id
 
 
-    async def delete_session(self, session_id: str) -> int:
-        """Delete all conversations for a session."""
+
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str,
+    ) -> int:
+        """
+        Delete a session only for its authenticated owner.
+        """
+
+        if not user_id:
+            raise ValueError("Authenticated user_id is required")
 
         async with AsyncSessionLocal() as db:
-            # Collect IDs before deleting the SQLite records.
             result = await db.execute(
                 select(Conversation.id).where(
-                    Conversation.session_id == session_id
+                    Conversation.session_id == session_id,
+                    Conversation.user_id == user_id,
                 )
             )
+
             ids = [row for (row,) in result.all()]
+
+            if not ids:
+                return 0
 
             await db.execute(
                 delete(Conversation).where(
-                    Conversation.session_id == session_id
+                    Conversation.session_id == session_id,
+                    Conversation.user_id == user_id,
                 )
             )
+
             await db.commit()
 
-        # Remove corresponding records from ChromaDB.
-        if ids:
-            try:
+
+        # Remove vectors belonging to the authenticated user.
+        try:
+            if self._use_pgvector:
+                # Cloud: delete only this user's conversation vectors.
+                for conv_id in ids:
+                    await self._pgvector.delete_vector(
+                        kind="conversation",
+                        vector_id=conv_id,
+                        user_id=user_id,
+                    )
+            else:
+                # Local: retain ChromaDB cleanup behavior.
                 self._collection.delete(ids=ids)
-            except Exception as exc:
-                logger.warning("ChromaDB delete failed: %s", exc)
+
+        except Exception as exc:
+            logger.warning(
+                "Session vector cleanup failed: %s",
+                exc,
+            )
+
 
         return len(ids)
 
-    
+
+
     async def get_all_sessions(
         self,
         user_id: str,
@@ -216,8 +295,9 @@ class MemoryManager:
     # Semantic search (ChromaDB)
     # --------------------------------------------------------------
 
-    
-    def search_similar_conversations(
+
+
+    async def search_similar_conversations(
         self,
         query: str,
         n_results: int = 3,
@@ -229,16 +309,45 @@ class MemoryManager:
         if not user_id:
             raise ValueError("Authenticated user_id is required")
 
+        if n_results <= 0:
+            return []
+
         try:
-            count = self._collection.count()
-
-            if count == 0:
-                return []
-
             embedding = get_embedding(
                 query,
                 task_type="RETRIEVAL_QUERY",
             )
+
+            if self._use_pgvector:
+                # Cloud: user-filtered pgvector similarity search.
+                results = await self._pgvector.search(
+                    kind="conversation",
+                    user_id=user_id,
+                    embedding=embedding,
+                    limit=n_results,
+                )
+
+                return [
+                    {
+                        "document": item["document"],
+                        "session_id": item["metadata"].get(
+                            "session_id", ""
+                        ),
+                        "conv_id": item["metadata"].get(
+                            "conv_id", item["id"]
+                        ),
+                        "similarity": round(
+                            item["similarity"], 4
+                        ),
+                    }
+                    for item in results
+                ]
+
+            # Local: preserve ChromaDB similarity search.
+            count = self._collection.count()
+
+            if count == 0:
+                return []
 
             results = self._collection.query(
                 query_embeddings=[embedding],
@@ -266,8 +375,12 @@ class MemoryManager:
             return output
 
         except Exception as exc:
-            logger.warning("Similarity search failed: %s", exc)
+            logger.warning(
+                "Similarity search failed: %s",
+                exc,
+            )
             return []
+
 
 
     # --------------------------------------------------------------
@@ -275,7 +388,7 @@ class MemoryManager:
     # --------------------------------------------------------------
 
     async def summarize_session(
-        self, 
+        self,
         session_id: str,
         *,
         user_id: str,

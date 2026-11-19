@@ -5,7 +5,7 @@ FastAPI router for /api/chat — standard HTTP + WebSocket endpoints.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,7 @@ class ChatResponse(BaseModel):
 @router.post("/", response_model=ChatResponse, summary="Send a message to the AI agent")
 async def chat(
     request: ChatRequest ,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),):
     """
     Send a user message and receive an AI-generated response.
@@ -60,6 +61,7 @@ async def chat(
             user_message=request.message,
             search_web=request.search_web,
             user_id=user_id,
+            background_tasks=background_tasks,
         )
         return ChatResponse(
             session_id=request.session_id,
@@ -70,9 +72,12 @@ async def chat(
             used_knowledge=result.used_knowledge,
             tokens_used=result.tokens_used,
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Chat processing failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred while processing your message.",
+        )
 
 
 @router.get(
@@ -84,9 +89,12 @@ async def get_history(session_id: str, limit: int = 20,user_id: str = Depends(ge
     try:
         history = await _memory.get_session_history(session_id,user_id=user_id,limit=limit)
         return {"session_id": session_id, "history": history, "count": len(history)}
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to retrieve history")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve conversation history.",
+        )
 
 
 @router.get("/sessions", summary="List all sessions with message counts")
@@ -95,9 +103,12 @@ async def list_sessions(user_id: str = Depends(get_current_user_id)):
     try:
         sessions = await _memory.get_all_sessions(user_id=user_id)
         return {"sessions": sessions, "total": len(sessions)}
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to list sessions")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve sessions.",
+        )
 
 
 '''@router.delete(

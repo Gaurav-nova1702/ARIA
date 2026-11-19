@@ -27,11 +27,31 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./agent.db")
 
+
+engine_options = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+
+if DATABASE_URL.startswith("sqlite"):
+    # Preserve local SQLite configuration.
+    engine_options["connect_args"] = {
+        "check_same_thread": False
+    }
+
+elif DATABASE_URL.startswith(
+    ("postgresql+asyncpg://", "postgresql://")
+):
+    # Supabase PostgreSQL connections require TLS.
+    engine_options["connect_args"] = {
+        "ssl": "require"
+    }
+
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,
-    connect_args={"check_same_thread": False},
+    **engine_options
 )
+
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

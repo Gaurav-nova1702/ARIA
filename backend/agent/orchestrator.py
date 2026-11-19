@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from google import genai
+from fastapi import BackgroundTasks
 
 from tenacity import (
     retry,
@@ -89,6 +90,7 @@ class AgentOrchestrator:
         search_web: bool = False,
         *,
         user_id: str,
+        background_tasks: BackgroundTasks | None = None,
     ):
         if not user_id:
             raise ValueError("Authenticated user_id is required")
@@ -108,18 +110,20 @@ class AgentOrchestrator:
         })
 
         # Step 2: Retrieve conversation memory.
-        # search_similar_conversations is synchronous.
-        mem_results = self._memory.search_similar_conversations(
+        # Retrieve user-specific semantic memory asynchronously.
+        mem_results = await self._memory.search_similar_conversations(
             user_message,
             n_results=3,
             user_id=user_id,
         )
+
 
         # Apply similarity threshold.
         mem_results = [
             item for item in mem_results
             if item.get("similarity", 0) >= _SIMILARITY_THRESHOLD
         ]
+
 
         # Retrieve structured knowledge.
         kb_results = await self._knowledge.search_knowledge(
@@ -216,11 +220,24 @@ class AgentOrchestrator:
             user_id=user_id,
         )
         # Automatically learn useful information.
-        await self._learn_from_exchange(
-            user_message=user_message,
-            assistant_response=response_text,
-            user_id=user_id,
-        )
+
+        # Automatically learn from the completed exchange.
+        # For HTTP chat, run learning after the response is sent.
+        # Preserve existing behavior for other callers.
+        if background_tasks is not None:
+            background_tasks.add_task(
+                self._learn_from_exchange,
+                user_message=user_message,
+                assistant_response=response_text,
+                user_id=user_id,
+            )
+        else:
+            await self._learn_from_exchange(
+                user_message=user_message,
+                assistant_response=response_text,
+                user_id=user_id,
+            )
+
 
         total_time_ms = int(
             (time.time() - start_time) * 1000
@@ -234,7 +251,7 @@ class AgentOrchestrator:
             used_knowledge=bool(kb_results),
             tokens_used=tokens_used,
 )
-    
+
     # --------------------------------------------------------------
     # Automatic Knowledge Learning
     # --------------------------------------------------------------
@@ -255,6 +272,7 @@ class AgentOrchestrator:
 
         try:
             extraction_prompt = f"""
+logger.info("ARIA background learning started")
 You are ARIA's knowledge extraction system.
 
 Analyze this conversation and identify useful information
@@ -314,6 +332,10 @@ ARIA RESPONSE:
 
             extracted = json.loads(raw_text)
             items = extracted.get("items", [])
+            if not items:
+                logger.info(
+                    "ARIA background learning completed: no reusable knowledge"
+                )
 
             if not isinstance(items, list):
                 return
@@ -485,7 +507,7 @@ ARIA RESPONSE:
     ):
         if not user_id:
             raise ValueError("Authenticated user_id is required")
-    
+
         """
         Stream Gemini responses and persist completed exchanges.
         """
@@ -497,7 +519,7 @@ ARIA RESPONSE:
         )
 
         # Retrieve semantic memory for streaming too.
-        similar_convs = self._memory.search_similar_conversations(
+        similar_convs = await self._memory.search_similar_conversations(
             user_message,
             user_id=user_id,
             n_results=3,
